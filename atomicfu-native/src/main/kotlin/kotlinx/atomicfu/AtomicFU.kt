@@ -18,28 +18,49 @@
 
 package kotlinx.atomicfu
 
-public actual fun <T> atomic(initial: T): AtomicRef<T> = AtomicRef<T>(initial)
-public actual fun atomic(initial: Int): AtomicInt = AtomicInt(initial)
-public actual fun atomic(initial: Long): AtomicLong = AtomicLong(initial)
-public actual fun atomic(initial: Boolean): AtomicBoolean = AtomicBoolean(initial)
+import konan.worker.AtomicInt as KAtomicInt
+import konan.worker.AtomicLong as KAtomicLong
+import konan.worker.AtomicReference as KAtomicRef
+import konan.worker.freeze
+
+public actual fun <T> atomic(initial: T): AtomicRef<T> = AtomicRef<T>(KAtomicRef(initial.freeze()))
+public actual fun atomic(initial: Int): AtomicInt = AtomicInt(KAtomicInt(initial))
+public actual fun atomic(initial: Long): AtomicLong = AtomicLong(KAtomicLong(initial))
+public actual fun atomic(initial: Boolean): AtomicBoolean = AtomicBoolean(KAtomicInt(if (initial) 1 else 0))
 
 // ==================================== AtomicRef ====================================
 
-public actual class AtomicRef<T> internal constructor(value: T) {
-    public actual var value: T = value
+// todo: make it inline class
+public actual class AtomicRef<T> internal constructor(private val a: KAtomicRef<T>) {
+    public actual var value: T
+        get() = a.get() as T
+        set(value) {
+            value.freeze()
+            while (true) {
+                val cur = a.get()
+                if (cur === value) break
+                if (a.compareAndSwap(cur, value) === cur) break
+            }
+        }
 
     public actual inline fun lazySet(value: T) { this.value = value }
 
     public actual fun compareAndSet(expect: T, update: T): Boolean {
-        if (value !== expect) return false
-        value = update
-        return true
+        update.freeze()
+        while (true) {
+            val cur = a.get()
+            if (cur !== expect) return false
+            if (a.compareAndSwap(cur, update) === cur) return true
+        }
     }
 
     public actual fun getAndSet(value: T): T {
-        val oldValue = this.value
-        this.value = value
-        return oldValue
+        value.freeze()
+        while (true) {
+            val cur = a.get() as T
+            if (cur === value) return cur
+            if (a.compareAndSwap(cur, value) === cur) return cur
+        }
     }
 
     override fun toString(): String = value.toString()
@@ -47,23 +68,37 @@ public actual class AtomicRef<T> internal constructor(value: T) {
 
 // ==================================== AtomicBoolean ====================================
 
-public actual class AtomicBoolean internal constructor(value: Boolean) {
-    public actual var value: Boolean = value
+public actual class AtomicBoolean internal constructor(private val a: KAtomicInt) {
+    public actual var value: Boolean
+        get() = a.get() != 0
+        set(value) {
+            val iValue = if (value) 1 else 0
+            while (true) {
+                val cur = a.get()
+                if (cur == iValue) return
+                if (a.compareAndSwap(cur, iValue) == cur) return
+            }
+        }
 
-    public actual inline fun lazySet(value: Boolean) {
-        this.value = value
-    }
+    public actual fun lazySet(value: Boolean) { this.value = value }
 
-    public actual inline fun compareAndSet(expect: Boolean, update: Boolean): Boolean {
-        if (value != expect) return false
-        value = update
-        return true
+    public actual fun compareAndSet(expect: Boolean, update: Boolean): Boolean {
+        val iExpect = if (expect) 1 else 0
+        val iUpdate = if (update) 1 else 0
+        while (true) {
+            val cur = a.get()
+            if (cur != iExpect) return false
+            if (a.compareAndSwap(cur, iUpdate) == cur) return true
+        }
     }
 
     public actual fun getAndSet(value: Boolean): Boolean {
-        val oldValue = this.value
-        this.value = value
-        return oldValue
+        val iValue = if (value) 1 else 0
+        while (true) {
+            val cur = a.get()
+            if (cur == iValue) return value
+            if (a.compareAndSwap(cur, iValue) == cur) return cur != 0
+        }
     }
 
     override fun toString(): String = value.toString()
@@ -71,44 +106,43 @@ public actual class AtomicBoolean internal constructor(value: Boolean) {
 
 // ==================================== AtomicInt ====================================
 
-public actual class AtomicInt internal constructor(value: Int) {
-    public actual var value: Int = value
+public actual class AtomicInt internal constructor(private val a: KAtomicInt) {
+    public actual var value: Int
+        get() = a.get()
+        set(value) {
+            while (true) {
+                val cur = a.get()
+                if (cur == value) return
+                if (a.compareAndSwap(cur, value) == cur) return
+            }
+        }
 
     public actual inline fun lazySet(value: Int) { this.value = value }
 
     public actual fun compareAndSet(expect: Int, update: Int): Boolean {
-        if (value != expect) return false
-        value = update
-        return true
+        while (true) {
+            val cur = a.get()
+            if (cur != expect) return false
+            if (a.compareAndSwap(cur, update) == cur) return true
+        }
     }
 
     public actual fun getAndSet(value: Int): Int {
-        val oldValue = this.value
-        this.value = value
-        return oldValue
+        while (true) {
+            val cur = a.get()
+            if (cur == value) return cur
+            if (a.compareAndSwap(cur, value) == cur) return cur
+        }
     }
 
-    public actual inline fun getAndIncrement(): Int = value++
-
-    public actual inline fun getAndDecrement(): Int = value--
-
-    public actual fun getAndAdd(delta: Int): Int {
-        val oldValue = value
-        value += delta
-        return oldValue
-    }
-
-    public actual fun addAndGet(delta: Int): Int {
-        value += delta
-        return value
-    }
-
-    public actual inline fun incrementAndGet(): Int = ++value
-
-    public actual fun decrementAndGet(): Int = --value
+    public actual fun getAndIncrement(): Int = a.addAndGet(1) - 1
+    public actual fun getAndDecrement(): Int = a.addAndGet(-1) + 1
+    public actual fun getAndAdd(delta: Int): Int = a.addAndGet(delta) - delta
+    public actual fun addAndGet(delta: Int): Int = a.addAndGet(delta)
+    public actual fun incrementAndGet(): Int = a.addAndGet(1)
+    public actual fun decrementAndGet(): Int = a.addAndGet(-1)
 
     public actual inline operator fun plusAssign(delta: Int) { getAndAdd(delta) }
-
     public actual inline operator fun minusAssign(delta: Int) { getAndAdd(-delta) }
 
     override fun toString(): String = value.toString()
@@ -116,44 +150,43 @@ public actual class AtomicInt internal constructor(value: Int) {
 
 // ==================================== AtomicLong ====================================
 
-public actual class AtomicLong internal constructor(value: Long) {
-    public actual var value: Long = value
+public actual class AtomicLong internal constructor(private val a: KAtomicLong) {
+    public actual var value: Long
+        get() = a.get()
+        set(value) {
+            while (true) {
+                val cur = a.get()
+                if (cur == value) return
+                if (a.compareAndSwap(cur, value) == cur) return
+            }
+        }
 
     public actual inline fun lazySet(value: Long) { this.value = value }
 
     public actual fun compareAndSet(expect: Long, update: Long): Boolean {
-        if (value != expect) return false
-        value = update
-        return true
+        while (true) {
+            val cur = a.get()
+            if (cur != expect) return false
+            if (a.compareAndSwap(cur, update) == cur) return true
+        }
     }
 
     public actual fun getAndSet(value: Long): Long {
-        val oldValue = this.value
-        this.value = value
-        return oldValue
+        while (true) {
+            val cur = a.get()
+            if (cur == value) return cur
+            if (a.compareAndSwap(cur, value) == cur) return cur
+        }
     }
 
-    public actual fun getAndIncrement(): Long = value++
-
-    public actual fun getAndDecrement(): Long = value--
-
-    public actual fun getAndAdd(delta: Long): Long {
-        val oldValue = value
-        value += delta
-        return oldValue
-    }
-
-    public actual fun addAndGet(delta: Long): Long {
-        value += delta
-        return value
-    }
-
-    public actual fun incrementAndGet(): Long = ++value
-
-    public actual fun decrementAndGet(): Long = --value
+    public actual fun getAndIncrement(): Long = a.addAndGet(1) - 1
+    public actual fun getAndDecrement(): Long = a.addAndGet(-1) + 1
+    public actual fun getAndAdd(delta: Long): Long = a.addAndGet(delta) - delta
+    public actual fun addAndGet(delta: Long): Long = a.addAndGet(delta)
+    public actual fun incrementAndGet(): Long = a.addAndGet(1)
+    public actual fun decrementAndGet(): Long = a.addAndGet(-1)
 
     public actual inline operator fun plusAssign(delta: Long) { getAndAdd(delta) }
-
     public actual inline operator fun minusAssign(delta: Long) { getAndAdd(-delta) }
 
     override fun toString(): String = value.toString()
