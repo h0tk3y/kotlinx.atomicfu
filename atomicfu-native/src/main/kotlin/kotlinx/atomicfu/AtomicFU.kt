@@ -18,10 +18,10 @@
 
 package kotlinx.atomicfu
 
-import konan.worker.AtomicInt as KAtomicInt
-import konan.worker.AtomicLong as KAtomicLong
-import konan.worker.AtomicReference as KAtomicRef
-import konan.worker.freeze
+import kotlin.native.worker.AtomicInt as KAtomicInt
+import kotlin.native.worker.AtomicLong as KAtomicLong
+import kotlin.native.worker.AtomicReference as KAtomicRef
+import kotlin.native.worker.freeze
 
 public actual fun <T> atomic(initial: T): AtomicRef<T> = AtomicRef<T>(KAtomicRef(initial.freeze()))
 public actual fun atomic(initial: Int): AtomicInt = AtomicInt(KAtomicInt(initial))
